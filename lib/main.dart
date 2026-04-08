@@ -148,19 +148,14 @@ Future<void> _requestPermissions() async {
 onResult: (result) {
   final text = result.recognizedWords;
 
-  // لو الكلام اتغير بشكل كبير → نعتبره بداية جديدة
-  if (text != _lastPartial) {
-    setState(() {
-      _liveText = text;
-    });
+  setState(() {
+    _liveText = text;
+  });
 
+  // ✅ ابعت فقط لما الكلام يخلص
+  if (result.finalResult) {
     _sendViaBluetooth(text);
 
-    _lastPartial = text;
-  }
-
-  // لو النتيجة final → نحفظها في history و نفرغ live
-  if (result.finalResult) {
     setState(() {
       if (_liveText.isNotEmpty) {
         _history.insert(0, _liveText);
@@ -169,6 +164,9 @@ onResult: (result) {
       _lastPartial = '';
     });
   }
+  
+  // لو النتيجة final → نحفظها في history و نفرغ live
+ 
 },
         localeId: _selectedLocale,
         listenMode: stt.ListenMode.dictation,
@@ -263,7 +261,8 @@ onResult: (result) {
     if (text == _lastSent || text.isEmpty) return;
     _lastSent = text;
     try {
-      _btConnection!.output.add(Uint8List.fromList('$text\n'.codeUnits));
+      String formatted = text.trim() + "\n";
+_btConnection!.output.add(Uint8List.fromList(formatted.codeUnits));
       await _btConnection!.output.allSent;
     } catch (e) {
       debugPrint('BT send error: $e');
