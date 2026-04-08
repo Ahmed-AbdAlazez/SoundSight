@@ -63,6 +63,10 @@ class _HomeScreenState extends State<HomeScreen>
   String _liveText = '';
   String _lastPartial = '';
   final List<String> _history = [];
+List<String> _wordBuffer = [];
+Timer? _silenceTimer;
+Set<String> _sentChunks = {};
+
 
   // ── Bluetooth ──
   BluetoothConnection? _btConnection;
@@ -106,6 +110,7 @@ class _HomeScreenState extends State<HomeScreen>
     _waveCtrl.dispose();
     _scrollCtrl.dispose();
     _btConnection?.dispose();
+    _silenceTimer?.cancel();
     super.dispose();
   }
 
@@ -130,62 +135,103 @@ Future<void> _requestPermissions() async {
     print("Microphone denied ❌");
   }
 }
+////////
+void _sendChunk(String text) {
+  if (text.isEmpty) return;
 
-  // ─────────────── Speech ───────────────
-  Future<void> _startListening() async {
-    bool available = await _speech.initialize(
-      onStatus: (s) {
-        if (s == 'done' && _isListening) _startListening(); // auto-restart
-      },
-      onError: (e) => debugPrint('STT Error: $e'),
-    );
+  // 🔥 منع التكرار نهائي
+  if (_sentChunks.contains(text)) return;
 
-    if (available) {
-      setState(() => _isListening = true);
-      _speech.listen(
-        
+  _sentChunks.add(text);
 
-onResult: (result) {
-  final text = result.recognizedWords;
+  _lastSent = text;
+
+  _sendViaBluetooth(text);
 
   setState(() {
-    _liveText = text;
+    _history.insert(0, text);
   });
+}
 
-  // ✅ ابعت فقط لما الكلام يخلص
-  if (result.finalResult) {
-    _sendViaBluetooth(text);
+//////
+  // ─────────────── Speech ───────────────
+Future<void> _startListening() async {
+  bool available = await _speech.initialize(
+    onStatus: (s) {
+      if (s == 'done' && _isListening) _startListening();
+    },
+    onError: (e) => debugPrint('STT Error: $e'),
+  );
 
-    setState(() {
-      if (_liveText.isNotEmpty) {
-        _history.insert(0, _liveText);
-      }
-      _liveText = '';
-      _lastPartial = '';
-    });
+  if (available) {
+    setState(() => _isListening = true);
+
+    _speech.listen(
+      onResult: (result) {
+        final text = result.recognizedWords;
+
+        setState(() {
+          _liveText = text;
+        });
+
+        final words = text.trim().isEmpty
+            ? <String>[]
+            : text.trim().split(RegExp(r'\s+'));
+
+        // 🧠 update buffer بدون تكرار
+        if (words.length > _wordBuffer.length) {
+          _wordBuffer = words;
+        }
+
+        // 🔥 ابعت كل 5 كلمات
+        while (_wordBuffer.length >= 5) {
+          final chunk = _wordBuffer.sublist(0, 5).join(' ');
+          _wordBuffer = _wordBuffer.sublist(5);
+
+          _sendChunk(chunk);
+        }
+
+        // 🧠 reset silence timer
+        _silenceTimer?.cancel();
+        _silenceTimer = Timer(const Duration(seconds: 2), () {
+          _flushRemaining(); // 👈 هنا السحر
+        });
+
+        // ✅ لو final → ابعت الباقي فورًا
+        if (result.finalResult) {
+          _silenceTimer?.cancel();
+          _flushRemaining();
+        }
+      },
+      localeId: _selectedLocale,
+      listenMode: stt.ListenMode.dictation,
+      cancelOnError: false,
+      partialResults: true,
+    );
   }
-  
-  // لو النتيجة final → نحفظها في history و نفرغ live
- 
-},
-        localeId: _selectedLocale,
-        listenMode: stt.ListenMode.dictation,
-        cancelOnError: false,
-        partialResults: true,
-      );
-    }
-  }
+}
 
+////////////////////////////////
+ void _flushRemaining() {
+  if (_wordBuffer.isEmpty) return;
+
+  final chunk = _wordBuffer.join(' ');
+  _wordBuffer.clear();
+
+  _sendChunk(chunk);
+}
+
+////////////////////////
   void _stopListening() {
-    _speech.stop();
-    if (_liveText.isNotEmpty) {
-      setState(() {
-        _history.insert(0, _liveText);
-        _liveText = '';
-      });
-    }
-    setState(() => _isListening = false);
-  }
+  _speech.stop();
+
+  _silenceTimer?.cancel();
+  _flushRemaining();
+
+  _sentChunks.clear(); // 👈 مهم
+
+  setState(() => _isListening = false);
+}
 
   void _clearAll() {
     setState(() {
