@@ -5,7 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
-
+import 'dart:convert';
 void main() {
   runApp(const MyApp());
 }
@@ -262,7 +262,7 @@ onResult: (result) {
     _lastSent = text;
     try {
       String formatted = text.trim() + "\n";
-_btConnection!.output.add(Uint8List.fromList(formatted.codeUnits));
+_btConnection!.output.add(Uint8List.fromList(utf8.encode(formatted)));
       await _btConnection!.output.allSent;
     } catch (e) {
       debugPrint('BT send error: $e');
