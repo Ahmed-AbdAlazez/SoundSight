@@ -157,58 +157,86 @@ void _sendChunk(String text) {
   // ─────────────── Speech ───────────────
 Future<void> _startListening() async {
   bool available = await _speech.initialize(
-    onStatus: (s) {
-      if (s == 'done' && _isListening) _startListening();
-    },
-    onError: (e) => debugPrint('STT Error: $e'),
-  );
+  onStatus: (s) {
+    debugPrint("STATUS: $s");
 
-  if (available) {
-    setState(() => _isListening = true);
-
-    _speech.listen(
-      onResult: (result) {
-        final text = result.recognizedWords;
-
-        setState(() {
-          _liveText = text;
+    if (s == 'notListening' || s == 'done') {
+      if (_isListening) {
+        Future.delayed(const Duration(milliseconds: 200), () {
+          _startListening();
         });
+      }
+    }
+  },
 
-        final words = text.trim().isEmpty
-            ? <String>[]
-            : text.trim().split(RegExp(r'\s+'));
+  // 👇 حطها هنا بالظبط
+  onError: (e) {
+    debugPrint('STT Error: $e');
 
-        // 🧠 update buffer بدون تكرار
-        if (words.length > _wordBuffer.length) {
-          _wordBuffer = words;
+    if (_isListening) {
+      Future.delayed(const Duration(milliseconds: 300), () {
+        _startListening();
+      });
+    }
+  },
+);
+
+  if (!available) return;
+
+  setState(() => _isListening = true);
+
+  _speech.listen(
+    onResult: (result) {
+      final text = result.recognizedWords.trim();
+      if (text.isEmpty) return;
+
+      // 🔥 update UI
+      setState(() {
+        _liveText = text;
+      });
+     
+
+
+      final words = text.split(RegExp(r'\s+'));
+
+      // 🔥 ignore noise (لو الكلام قصير قوي غالبًا noise)
+   // ✅ اسمح بالكلام حتى لو كلمة واحدة (عشان الدوشة)
+      if (words.isEmpty) return;
+
+      // 🔥 dynamic chunk (مش ثابت 5)
+      int chunkSize = words.length >= 6 ? 4 : 3;
+
+      List<String> temp = List.from(words);
+
+      while (temp.length >= chunkSize) {
+        final chunk = temp.sublist(0, chunkSize).join(' ');
+        temp.removeRange(0, chunkSize);
+
+        _sendChunk(chunk);
+      }
+
+      // 🔥 smart silence detection (أسرع)
+      _silenceTimer?.cancel();
+      _silenceTimer = Timer(const Duration(milliseconds: 1200), () {
+        if (temp.isNotEmpty) {
+          _sendChunk(temp.join(' '));
         }
+      });
 
-        // 🔥 ابعت كل 5 كلمات
-        while (_wordBuffer.length >= 5) {
-          final chunk = _wordBuffer.sublist(0, 5).join(' ');
-          _wordBuffer = _wordBuffer.sublist(5);
-
-          _sendChunk(chunk);
-        }
-
-        // 🧠 reset silence timer
+      // 🔥 final flush
+      if (result.finalResult && temp.isNotEmpty) {
         _silenceTimer?.cancel();
-        _silenceTimer = Timer(const Duration(seconds: 2), () {
-          _flushRemaining(); // 👈 هنا السحر
-        });
+        _sendChunk(temp.join(' '));
+      }
+    },
+    localeId: _selectedLocale,
 
-        // ✅ لو final → ابعت الباقي فورًا
-        if (result.finalResult) {
-          _silenceTimer?.cancel();
-          _flushRemaining();
-        }
-      },
-      localeId: _selectedLocale,
-      listenMode: stt.ListenMode.dictation,
-      cancelOnError: false,
-      partialResults: true,
-    );
-  }
+    // 🔥 أهم حاجة
+    listenMode: stt.ListenMode.dictation,
+
+    cancelOnError: true,
+    partialResults: true,
+  );
 }
 
 ////////////////////////////////
