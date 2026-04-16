@@ -304,8 +304,7 @@ Future<void> _startListening() async {
 
   Future<void> _sendViaBluetooth(String text) async {
     if (!_btConnected || _btConnection == null) return;
-    if (text == _lastSent || text.isEmpty) return;
-    _lastSent = text;
+    
     try {
       String formatted = text.trim() + "\n";
 _btConnection!.output.add(Uint8List.fromList(utf8.encode(formatted)));
