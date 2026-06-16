@@ -1,6 +1,6 @@
 # 👓 EchoLens
 <p align="center">
-  <img src="images/Team.jpeg" width="900">
+ <img src="Images/Team.jpeg" width="900">
 </p>
 ### 🗣️ Smart Glasses for Real-Time Speech Transcription and Dysarthric Speech Recognition
 
@@ -136,7 +136,7 @@ The reflected text appears directly in the user's field of view while maintainin
 ## 👓 Smart Glasses Prototype
 
 <p align="center">
-<img src="images/smartglass image.jpeg" width="700">
+  <img src="Images/smart%20glass.jpeg" width="700">
 </p>
 
 ---
@@ -146,7 +146,7 @@ The reflected text appears directly in the user's field of view while maintainin
 ## 📱 Mobile Application Screenshots
 
 <p align="center">
-<img src="images/screenshot.jpeg" width="700">
+<img src="Images/screenshot.jpeg" width="700">
 </p>
 
 
