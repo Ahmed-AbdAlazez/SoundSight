@@ -1,0 +1,354 @@
+# ============================================================
+# Environment
+# ============================================================
+
+import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
+# ============================================================
+# Imports
+# ============================================================
+
+import re
+import glob
+import torch
+
+from dataclasses import dataclass
+from typing import Any
+
+from datasets import (
+    load_dataset,
+    DatasetDict,
+    Audio,
+    load_from_disk,
+)
+
+from transformers import (
+    WhisperProcessor,
+    WhisperForConditionalGeneration,
+    Seq2SeqTrainer,
+    Seq2SeqTrainingArguments,
+)
+
+# ============================================================
+# Paths
+# ============================================================
+
+OUTPUT_DIR = "/content/drive/MyDrive/whisper-dysarthric"
+
+PROCESSED_DATASET_PATH = (
+    "/content/drive/MyDrive/whisper-dysarthric/processed_dataset"
+)
+
+# ============================================================
+# Configuration
+# ============================================================
+
+@dataclass
+class Config:
+    DATASET_NAME: str = "abnerh/TORGO-database"
+
+    TRAIN_SPLIT: str = "train"
+    TEST_SPLIT: str = "test"
+
+    AUDIO_COLUMN: str = "audio"
+    TEXT_COLUMN: str = "transcription"
+
+    MODEL_NAME: str = "openai/whisper-small"
+
+    LANGUAGE: str = "english"
+    TASK: str = "transcribe"
+
+    SAMPLING_RATE: int = 16000
+
+    VAL_SIZE: float = 0.1
+
+    NUM_TRAIN_EPOCHS: int = 5
+    PER_DEVICE_TRAIN_BATCH_SIZE: int = 1
+    GRADIENT_ACCUMULATION_STEPS: int = 4
+
+    LEARNING_RATE: float = 1e-5
+    WARMUP_STEPS: int = 500
+
+    FP16: bool = True
+    GRADIENT_CHECKPOINTING: bool = True
+
+    DATALOADER_NUM_WORKERS: int = 0
+
+
+cfg = Config()
+
+# ============================================================
+# Device
+# ============================================================
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+print(f"Device: {device}")
+
+if torch.cuda.is_available():
+    print("GPU:", torch.cuda.get_device_name(0))
+
+# ============================================================
+# Processor & Model
+# ============================================================
+
+processor = WhisperProcessor.from_pretrained(
+    cfg.MODEL_NAME,
+    language=cfg.LANGUAGE,
+    task=cfg.TASK,
+)
+
+model = WhisperForConditionalGeneration.from_pretrained(
+    cfg.MODEL_NAME
+)
+
+model.to(device)
+
+# Train decoder only
+model.freeze_encoder()
+
+if cfg.GRADIENT_CHECKPOINTING:
+    model.gradient_checkpointing_enable()
+
+model.config.use_cache = False
+
+trainable_params = sum(
+    p.numel()
+    for p in model.parameters()
+    if p.requires_grad
+)
+
+print(f"Trainable parameters: {trainable_params:,}")
+
+# ============================================================
+# Dataset
+# ============================================================
+
+raw_dataset = load_dataset(cfg.DATASET_NAME)
+
+if cfg.TRAIN_SPLIT in raw_dataset and cfg.TEST_SPLIT in raw_dataset:
+
+    dataset = DatasetDict({
+        "train": raw_dataset[cfg.TRAIN_SPLIT],
+        "validation": raw_dataset[cfg.TEST_SPLIT],
+    })
+
+else:
+
+    split = raw_dataset[cfg.TRAIN_SPLIT].train_test_split(
+        test_size=cfg.VAL_SIZE,
+        seed=42,
+    )
+
+    dataset = DatasetDict({
+        "train": split["train"],
+        "validation": split["test"],
+    })
+
+dataset = dataset.cast_column(
+    cfg.AUDIO_COLUMN,
+    Audio(sampling_rate=cfg.SAMPLING_RATE)
+)
+
+# ============================================================
+# Text Cleaning
+# ============================================================
+
+def normalize_text(text: str) -> str:
+
+    text = text.lower().strip()
+    text = re.sub(r"[^\w\s']", "", text)
+    text = re.sub(r"\s+", " ", text)
+
+    return text
+
+# ============================================================
+# Preprocessing
+# ============================================================
+
+def preprocess(batch):
+
+    audio_arrays = [
+        sample["array"]
+        for sample in batch[cfg.AUDIO_COLUMN]
+    ]
+
+    features = processor.feature_extractor(
+        audio_arrays,
+        sampling_rate=cfg.SAMPLING_RATE,
+        return_tensors="np",
+    )
+
+    texts = [
+        normalize_text(text)
+        for text in batch[cfg.TEXT_COLUMN]
+    ]
+
+    labels = processor.tokenizer(
+        texts,
+        padding=False,
+        return_tensors="np",
+    )
+
+    batch["input_features"] = features.input_features
+    batch["labels"] = labels["input_ids"]
+
+    return batch
+
+# ============================================================
+# Process Dataset
+# ============================================================
+
+if os.path.exists(PROCESSED_DATASET_PATH):
+
+    print("Loading cached dataset...")
+
+    dataset = load_from_disk(
+        PROCESSED_DATASET_PATH
+    )
+
+else:
+
+    print("Processing dataset...")
+
+    dataset = dataset.map(
+        preprocess,
+        batched=True,
+        batch_size=4,
+        remove_columns=dataset["train"].column_names,
+    )
+
+    dataset.save_to_disk(
+        PROCESSED_DATASET_PATH
+    )
+
+# ============================================================
+# Data Collator
+# ============================================================
+
+@dataclass
+class DataCollatorSpeechSeq2SeqWithPadding:
+
+    processor: Any
+
+    def __call__(self, features):
+
+        input_features = [
+            {"input_features": item["input_features"]}
+            for item in features
+        ]
+
+        batch = self.processor.feature_extractor.pad(
+            input_features,
+            return_tensors="pt",
+        )
+
+        label_features = [
+            {"input_ids": item["labels"]}
+            for item in features
+        ]
+
+        labels_batch = self.processor.tokenizer.pad(
+            label_features,
+            return_tensors="pt",
+        )
+
+        labels = labels_batch["input_ids"].masked_fill(
+            labels_batch.attention_mask.ne(1),
+            -100,
+        )
+
+        batch["labels"] = labels
+
+        return batch
+
+data_collator = DataCollatorSpeechSeq2SeqWithPadding(
+    processor=processor
+)
+
+# ============================================================
+# Training Arguments
+# ============================================================
+
+training_args = Seq2SeqTrainingArguments(
+    output_dir=OUTPUT_DIR,
+
+    num_train_epochs=cfg.NUM_TRAIN_EPOCHS,
+
+    per_device_train_batch_size=
+    cfg.PER_DEVICE_TRAIN_BATCH_SIZE,
+
+    gradient_accumulation_steps=
+    cfg.GRADIENT_ACCUMULATION_STEPS,
+
+    learning_rate=cfg.LEARNING_RATE,
+
+    warmup_steps=cfg.WARMUP_STEPS,
+
+    fp16=cfg.FP16,
+
+    logging_steps=50,
+
+    save_strategy="steps",
+    save_steps=3000,
+    save_total_limit=3,
+
+    dataloader_num_workers=
+    cfg.DATALOADER_NUM_WORKERS,
+)
+
+# ============================================================
+# Trainer
+# ============================================================
+
+trainer = Seq2SeqTrainer(
+    model=model,
+    args=training_args,
+    train_dataset=dataset["train"],
+    data_collator=data_collator,
+)
+
+# ============================================================
+# Resume Checkpoint
+# ============================================================
+
+checkpoints = sorted(
+    glob.glob(
+        os.path.join(
+            OUTPUT_DIR,
+            "checkpoint-*"
+        )
+    )
+)
+
+checkpoint = (
+    checkpoints[-1]
+    if checkpoints
+    else None
+)
+
+if checkpoint:
+    print(f"Resuming from: {checkpoint}")
+
+# ============================================================
+# Training
+# ============================================================
+
+torch.cuda.empty_cache()
+
+trainer.train(
+    resume_from_checkpoint=checkpoint
+)
+
+# ============================================================
+# Save
+# ============================================================
+
+trainer.save_model(OUTPUT_DIR)
+
+processor.save_pretrained(
+    OUTPUT_DIR
+)
+
+print("Training finished successfully.")
