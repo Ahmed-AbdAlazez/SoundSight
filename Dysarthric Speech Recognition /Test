@@ -1,0 +1,91 @@
+import torch
+import librosa
+
+from transformers import (
+    WhisperProcessor,
+    WhisperForConditionalGeneration,
+)
+
+# ============================================================
+# Config
+# ============================================================
+
+MODEL_PATH = "/content/drive/MyDrive/whisper-dysarthric/checkpoint-14500"    # any version you choose
+AUDIO_PATH = "/content/drive/MyDrive/test4.wav"           # audio and it should be .wav if mp3 can convert it 
+
+SAMPLE_RATE = 16000
+CHUNK_DURATION = 5  # seconds
+
+# ============================================================
+# Device
+# ============================================================
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+# ============================================================
+# Load Model
+# ============================================================
+
+processor = WhisperProcessor.from_pretrained(
+    "openai/whisper-small"
+)
+
+model = WhisperForConditionalGeneration.from_pretrained(
+    MODEL_PATH
+)
+
+model.to(device)
+model.eval()
+
+print(f"Model loaded on {device}")
+
+# ============================================================
+# Load Audio
+# ============================================================
+
+audio, _ = librosa.load(
+    AUDIO_PATH,
+    sr=SAMPLE_RATE
+)
+
+chunk_size = SAMPLE_RATE * CHUNK_DURATION
+
+# ============================================================
+# Transcription
+# ============================================================
+
+transcriptions = []
+
+for start in range(0, len(audio), chunk_size):
+
+    chunk = audio[start:start + chunk_size]
+
+    inputs = processor(
+        chunk,
+        sampling_rate=SAMPLE_RATE,
+        return_tensors="pt"
+    ).input_features.to(device)
+
+    with torch.no_grad():
+
+        predicted_ids = model.generate(
+            inputs,
+            num_beams=2,
+            no_repeat_ngram_size=2,
+        )
+
+    text = processor.batch_decode(
+        predicted_ids,
+        skip_special_tokens=True
+    )[0]
+
+    transcriptions.append(text)
+
+# ============================================================
+# Output
+# ============================================================
+
+final_transcription = " ".join(transcriptions)
+
+print("\nFULL TRANSCRIPTION:\n")
+print(final_transcription)
