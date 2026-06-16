@@ -1,5 +1,7 @@
 # 👓 EchoLens
-
+<p align="center">
+  <img src="images/Team.jpeg" width="900">
+</p>
 ### 🗣️ Smart Glasses for Real-Time Speech Transcription and Dysarthric Speech Recognition
 
 🏆 **3rd Place Winner – 15th Research Day**
@@ -134,32 +136,19 @@ The reflected text appears directly in the user's field of view while maintainin
 ## 👓 Smart Glasses Prototype
 
 <p align="center">
-Add Smart Glasses Images Here
+<img src="images/smartglass image.jpeg" width="700">
 </p>
 
 ---
 
-## 🔧 Hardware Assembly
 
-<p align="center">
-Add Hardware Images Here
-</p>
-
----
 
 ## 📱 Mobile Application Screenshots
 
 <p align="center">
-Add Flutter Application Screenshots Here
+<img src="images/screenshot.jpeg" width="700">
 </p>
 
----
-
-## 🎥 System Demonstration
-
-<p align="center">
-Add Demonstration Photos or GIFs Here
-</p>
 
 ---
 
